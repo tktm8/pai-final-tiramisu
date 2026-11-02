@@ -21,6 +21,7 @@ import sam_pieces  # noqa: E402
 import topcam  # noqa: E402
 import wrist_servo as W  # noqa: E402
 import wrist_refine as WR  # noqa: E402
+import dagger as DG  # noqa: E402
 from planner import Segment  # noqa: E402
 from robot_io import Follower  # noqa: E402
 
@@ -48,6 +49,9 @@ GRIP_DZ = [0.0]          # how much higher than usual the current piece was grip
 G.Z_TRAVEL = 150.0      # hover / carry height above the place cell (the arm uses the highest it can reach)
 FINE_ALIGN = True       # reserve picks: reachable-hover search (+ optional wrist-camera alignment)
 USE_WRIST_CAMERA = False   # wrist alignment needs a correct reference point per size first
+# DAgger (robot/dagger.py): a trained policy replaces the image-Jacobian step and every desk pick is recorded.
+# robot/dagger_collect.py also sets an expert (leader arm), pick-only mode and a deliberately wrong start hover.
+DAGGER = {"use_policy": True, "record": True, "expert": None, "pick_only": False, "hover_noise": 0.0}
 
 
 def fix_left_z(P):
@@ -506,16 +510,44 @@ def move(src, dst, size, log=print, arm="right"):
                 held, qh, down, xy = pk.pick(chosen, size, q_hc)
             else:   # grasp straight down at the corrected overhead estimate (what worked on 2026-11-01 08:08)
                 qh, xy = q_hc, chosen - c[:2] * (d + 24.0) / 2
+                if DAGGER["hover_noise"] > 0:      # data collection: start from a deliberately wrong hover
+                    nz = np.random.uniform(-1.0, 1.0, 2) * DAGGER["hover_noise"]
+                    q2 = pk.move_hover(xy + nz, a_dn, c, qh, g0)
+                    if q2 is not None:
+                        qh, xy = q2, xy + nz
+                        log(f"  dagger: start hover moved by ({nz[0]:+.1f}, {nz[1]:+.1f}) mm")
                 xy_first = xy.copy()
                 wr = WR.WristRefine(ARM[0], size, chosen_ang, log)
+                ep = DG.Episode(ARM[0], size, chosen_ang, log) if DAGGER["record"] else None
+                pol = DG.policy() if DAGGER["use_policy"] else None
+                tries, xy_expert = 0, None
+
+                def correct(first):
+                    """Step (mm) from the learned policy, else the image-Jacobian correction. Records the state."""
+                    if pol is not None:
+                        img = wr.last if first else wr.snap("hover1")
+                        if img is None:
+                            return None
+                        step, spread = pol.predict(img, ARM[0], size, chosen_ang)
+                        log(f"  dagger policy (round {pol.round}): move ({step[0]:+.1f}, {step[1]:+.1f}) mm, "
+                            f"ensemble spread {spread:.1f} mm")
+                        src = "policy"
+                    else:
+                        step = wr.correction_from_b0() if first else wr.correction()
+                        img, spread, src = wr.last, None, "jacobian"
+                    if ep is not None:
+                        ep.add(img, xy, step, src, spread)
+                    return step
+
                 wr.before_grasp()
                 # align with the wrist camera before the first try (a missed first try pushes the piece away)
-                step = wr.correction_from_b0()
-                if step is not None and np.linalg.norm(step) > 8.0:
-                    log(f"  wrist: {np.linalg.norm(step):.0f} mm is too far to trust before the first try - not moving")
-                    step = None
-                elif step is not None and np.linalg.norm(step) > 6.0:
-                    step = step * 6.0 / np.linalg.norm(step)
+                step = correct(True)
+                if pol is None:      # the Jacobian step is only trusted when small
+                    if step is not None and np.linalg.norm(step) > 8.0:
+                        log(f"  wrist: {np.linalg.norm(step):.0f} mm is too far to trust before the first try - not moving")
+                        step = None
+                    elif step is not None and np.linalg.norm(step) > 6.0:
+                        step = step * 6.0 / np.linalg.norm(step)
                 if step is not None and np.linalg.norm(step) > 1.5:
                     q2 = pk.move_hover(xy + step, a_dn, c, qh, g0)
                     if q2 is not None:
@@ -523,25 +555,20 @@ def move(src, dst, size, log=print, arm="right"):
                         log(f"  wrist: aligned before grasping ({step[0]:+.1f}, {step[1]:+.1f}) mm")
                         learn_desk_offset(*step, log, gain=0.15)
                         wr.b0 = wr.find(wr.ref(), "hover0b") if wr.ref() is not None else wr.b0
+                        if ep is not None and wr.ref() is not None:
+                            ep.add(wr.last, xy, None, "after_step")
                         xy_first = xy.copy()
                 held, down = pk.try_grasp(qh, xy, a_dn, c, size, g0)
                 held = held and lift_check(f, pk, down, log)
+                tries += 1
                 if held:
                     wr.learn_ref(w=0.2)          # held at once: only a small pull (the user-taught REF is exact)
-                elif wr.b0 is not None:
+                elif wr.b0 is not None or pol is not None:
                     # missed: back up to the hover and let the wrist camera say where the piece really is
                     if down is not None:
                         f.run([Segment("open", [down[-1]] * G.HOLD, g0), Segment("up", list(reversed(down)), g0)])
                         down = None
-                    hov_q = {"q": qh}
-
-                    def _move(xy_t):
-                        q_t = pk.move_hover(xy_t, a_dn, c, hov_q["q"], g0)
-                        if q_t is not None:
-                            hov_q["q"] = q_t
-                        return q_t is not None
-                    qh = hov_q["q"]           # J is only learned in robot/wrist_teach.py (piece held still)
-                    step = wr.correction()
+                    step = correct(False)
                     if step is not None and np.linalg.norm(step) > 1.5:
                         xy2 = xy + step
                         q2 = pk.move_hover(xy2, a_dn, c, qh, g0)
@@ -549,6 +576,7 @@ def move(src, dst, size, log=print, arm="right"):
                             qh = q2
                             held, down = pk.try_grasp(qh, xy2, a_dn, c, size, g0)
                             held = held and lift_check(f, pk, down, log)
+                            tries += 1
                             log(f"  retry at the wrist-camera spot ({step[0]:+.1f}, {step[1]:+.1f}) mm -> "
                                 f"{'HELD' if held else 'missed'}")
                             if held:
@@ -560,18 +588,42 @@ def move(src, dst, size, log=print, arm="right"):
                         break
                     if down is not None:
                         f.run([Segment("open", [down[-1]] * G.HOLD, g0), Segment("up", list(reversed(down)), g0)])
+                        down = None
                     xy2 = xy + np.array([dx, dy])
                     q2 = pk.move_hover(xy2, a_dn, c, qh, g0)
                     if q2 is None:
                         continue
                     qh = q2
+                    if ep is not None:         # every hover the robot visits is a state for DAgger
+                        ep.add(wr.snap("nudge"), xy2, None, "nudge")
                     held, down = pk.try_grasp(qh, xy2, a_dn, c, size, g0)
                     held = held and lift_check(f, pk, down, log)
+                    tries += 1
                     log(f"  retry with nudge ({dx:+.0f}, {dy:+.0f}) mm -> {'HELD' if held else 'missed'}")
                     if held:
                         xy = xy2
                         learn_desk_offset(dx, dy, log)
                         wr.learn_ref(xy2 - xy_first)
+                # gave up: the person shows the right spot with the leader arm (DAgger expert)
+                if not held and DAGGER["expert"] is not None:
+                    import dagger_expert as DX
+                    if down is not None:
+                        f.run([Segment("open", [down[-1]] * G.HOLD, g0), Segment("up", list(reversed(down)), g0)])
+                        down = None
+                    res = DAGGER["expert"](DX.Ctx(f, ARM[0], pk, xy, qh, a_dn, c, g0, gp.k, log))
+                    if res is not None:
+                        xy_expert, q_at = res
+                        q2 = pk.move_hover(xy_expert, a_dn, c, q_at, g0)
+                        if q2 is not None:
+                            qh = q2
+                            held, down = pk.try_grasp(qh, xy_expert, a_dn, c, size, g0)
+                            held = held and lift_check(f, pk, down, log)
+                            tries += 1
+                            log(f"  grasp at the expert's spot -> {'HELD' if held else 'missed'}")
+                            if held:
+                                xy = xy_expert
+                if ep is not None:
+                    ep.finish(held, xy if held else None, xy_expert, tries)
                 wr.close()
         else:
             if not run_retry(f, q_cam, [Segment("to_above_piece", way, g0)], log):
@@ -582,12 +634,13 @@ def move(src, dst, size, log=print, arm="right"):
             held, down = pk.try_grasp(qh, xy, a_dn, c, size, g0, floor=floor)
             held = held and lift_check(f, pk, down, log)
         log("GRASP: " + ("HELD" if held else "missed"))
-        if not held:
+        if not held or DAGGER["pick_only"]:
+            # missed, or collecting DAgger data: let go where it was gripped and go back to the photo pose
             if down is not None:
                 f.run([Segment("open", [down[-1]] * G.HOLD, g0), Segment("up", list(reversed(down)), g0)])
             back = P.staged_path(pk.chk, ARM[0], qh, q_cam, g0)
             f.run([Segment("back", back, g0)] if back else safe_home_segments(qh, q_cam, g0))
-            return False
+            return held
 
         # ---- destination (cell, corrected); pieces already on it end up inside the cup
         g_hold = W.units_to_rad(arm=ARM[0], units=max(0.0, pk.grip_units))       # keep the size-dependent squeeze while carrying

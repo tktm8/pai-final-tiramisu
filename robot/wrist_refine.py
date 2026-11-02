@@ -57,6 +57,7 @@ class WristRefine:
         self.st = json.loads(STATE.read_text()) if STATE.exists() else {}
         self.cap = None
         self.b0 = None
+        self.last = None      # the latest wrist frame (DAgger records it)
 
     # ---- state
     @property
@@ -92,6 +93,7 @@ class WristRefine:
                     img = fr
             if img is not None:
                 cv2.imwrite(str(ROOT / "out" / f"wrist_{self.arm}_{tag}.jpg"), img)
+            self.last = img
             return img
         except Exception as e:
             self.log(f"  wrist camera: {e}")
