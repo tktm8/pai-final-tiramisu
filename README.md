@@ -31,6 +31,12 @@
 | **最初の 1 手を置く** | **つかんで運び、マスに置く** |
 | <img src="docs/pick_left_first.gif" width="320"> | <img src="docs/pick_right_board.gif" width="320"> |
 
+### ロボットの 1 手まるごと（8倍速）
+
+考える → StackChan がしゃべる → コマをつかんで置く → 撮影ポジションに戻る → 人の番、までの流れです。
+
+<p align="center"><img src="docs/b3_full.gif" width="300" alt="ロボットの 1 手まるごと"></p>
+
 ---
 
 ## システム全体
