@@ -8,16 +8,6 @@
   <img src="docs/setup.jpg" height="420" alt="全体の構成">
 </p>
 
-## プロモーション動画（2分55秒）
-
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=9TRCJUJH2go"><img src="docs/promo_thumbnail.jpg" width="640" alt="プロモーション動画を YouTube で見る"></a>
-</p>
-
-<p align="center"><a href="https://www.youtube.com/watch?v=9TRCJUJH2go">▶ YouTube で見る</a>（対戦シーンは2倍速）</p>
-
----
-
 ## コンセプト
 
 > **一人暮らしでも、ボードゲームの相手がいる。**
