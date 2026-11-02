@@ -21,6 +21,18 @@
 
 ---
 
+## Pick and Place（実機、4倍速）
+
+左右の SO-101 が、置き場のコマをつかんで運び、盤のマスに置きます。大きいコマで、相手のコマにかぶせることもできます。
+
+| 置き場の大をつかんで盤へ | 反対の腕で大をつかんで盤へ |
+|---|---|
+| <img src="docs/pick_right_reserve.gif" width="320"> | <img src="docs/pick_left_reserve.gif" width="320"> |
+| **最初の 1 手を置く** | **つかんで運び、マスに置く** |
+| <img src="docs/pick_left_first.gif" width="320"> | <img src="docs/pick_right_board.gif" width="320"> |
+
+---
+
 ## システム全体
 
 ```mermaid
