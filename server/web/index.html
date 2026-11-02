@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>双腕StackChan ○× ゲーム</title>
+<style>
+  :root {
+    --bg: #fff8ee; --ink: #2b2118; --muted: #8a7a68; --card: #ffffff; --line: #ecdcc8;
+    --orange: #f28a2e; --orange-d: #c9661a; --blue: #5aa9e6; --blue-d: #2f7fbf; --good: #2e9e5b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font-family: -apple-system, "Hiragino Maru Gothic ProN", "Hiragino Sans", sans-serif;
+         display: flex; flex-direction: column; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); gap: 10px; overflow-x: hidden; }
+  header { display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 18px; margin: 0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #c8b8a4; display: inline-block; margin-right: 6px; }
+  .dot.on { background: var(--good); }
+  .status { font-size: 12px; color: var(--muted); }
+  .msg { font-size: 22px; font-weight: 700; text-align: center; line-height: 1.35; min-height: 2.7em; display: flex; align-items: center; justify-content: center; }
+  .lines { font-size: 14px; color: var(--muted); text-align: center; min-height: 1.4em; }
+  .lines b { color: var(--ink); font-weight: 600; }
+  .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; background: var(--line); padding: 6px; border-radius: 14px;
+           width: min(100%, 360px); margin: 0 auto; aspect-ratio: 1; }
+  .cell { background: var(--card); border-radius: 10px; display: flex; align-items: center; justify-content: center; position: relative; }
+  .cell.target { outline: 3px solid var(--good); }
+  .cell.src { outline: 3px dashed var(--blue-d); }
+  .piece { border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; }
+  .p0 { background: var(--orange); box-shadow: inset 0 -4px 0 var(--orange-d); }
+  .p1 { background: var(--blue); box-shadow: inset 0 -4px 0 var(--blue-d); }
+  .s0 { width: 34%; height: 34%; font-size: 12px; } .s1 { width: 54%; height: 54%; font-size: 15px; } .s2 { width: 78%; height: 78%; font-size: 18px; }
+  .under { position: absolute; bottom: 4px; right: 6px; font-size: 10px; color: var(--muted); }
+  .reserve { display: flex; justify-content: center; gap: 10px; font-size: 13px; color: var(--muted); align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; }
+  .mini { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
+  .actions { display: flex; flex-direction: column; gap: 10px; }
+  button { font: inherit; border: 0; border-radius: 16px; padding: 16px; font-size: 20px; font-weight: 700; background: var(--ink); color: #fff; }
+  button.alt { background: var(--card); color: var(--ink); border: 2px solid var(--line); }
+  button.go { background: var(--blue-d); }
+  button.robot { background: var(--orange); }
+  button:active { transform: scale(.98); }
+  .huge { flex: 1; min-height: 42vh; font-size: 30px; border-radius: 24px; }
+  .row { display: flex; gap: 10px; } .row > * { flex: 1; }
+  .toggle { display: flex; align-items: center; gap: 8px; justify-content: center; font-size: 15px; color: var(--muted); }
+  .chat { display: flex; gap: 8px; } .chat input { flex: 1; font: inherit; font-size: 16px; padding: 12px; border-radius: 12px; border: 2px solid var(--line); background: #fff; color: var(--ink); }
+  .chat button { font-size: 16px; padding: 12px 16px; }
+  .hidden { display: none !important; }
+  .tapzone { position: fixed; inset: 0; background: var(--orange); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center;
+             font-size: 34px; font-weight: 800; gap: 12px; z-index: 10; text-align: center; padding: 24px; }
+  .tapzone small { font-size: 16px; font-weight: 600; opacity: .9; }
+  .spinner { width: 28px; height: 28px; border: 4px solid var(--line); border-top-color: var(--orange); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>双腕StackChan ○× ゲーム</h1>
+  <span class="status"><span id="dot" class="dot"></span><span id="conn">…</span></span>
+</header>
+
+<div id="msg" class="msg">読み込み中…</div>
+<div id="lines" class="lines"></div>
+
+<div id="boardWrap">
+  <div id="board" class="board"></div>
+  <div class="reserve" id="reserve"></div>
+</div>
+
+<div id="actions" class="actions"></div>
+
+<div class="chat">
+  <input id="chatIn" placeholder="スタックチャンに話しかける" enterkeyhint="send">
+  <button id="chatBtn" class="alt">送る</button>
+</div>
+
+<div id="tapzone" class="tapzone hidden">
+  <div>ロボットの番 おわり</div>
+  <small>（スタックチャンのペンがここをタッチします）</small>
+</div>
+
+<script>
+const T = new URLSearchParams(location.search).get("t") || "";
+const SIZE = ["小", "中", "大"];
+let S = null, sel = null, lastVersion = -1;
+
+async function api(path, body) {
+  const r = await fetch(path + "?t=" + encodeURIComponent(T), body === undefined ? {} :
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (j && j.phase) { S = j; render(); }
+  return j;
+}
+
+// Human looks at the board from across the table: robot's row 0 is far (top), robot's col 0 is the human's right.
+const ORDER = [0, 1, 2].flatMap(r => [2, 1, 0].map(c => r * 3 + c));
+
+function pieceEl(p) {
+  const d = document.createElement("div");
+  d.className = `piece p${p.player} s${p.size}`;
+  d.textContent = SIZE[p.size];
+  return d;
+}
+
+function render() {
+  if (!S) return;
+  document.getElementById("msg").textContent = S.message;
+  document.getElementById("dot").className = "dot" + (S.stackchanOnline ? " on" : "");
+  document.getElementById("conn").textContent = S.stackchanOnline ? "StackChan接続中" : "StackChanオフライン";
+  document.getElementById("lines").innerHTML = S.lines.length ? "🗨️ <b>" + esc(S.lines[S.lines.length - 1]) + "</b>" : "";
+  const legal = S.legal || [];
+  const b = document.getElementById("board"); b.innerHTML = "";
+  for (const c of ORDER) {
+    const cell = document.createElement("div"); cell.className = "cell";
+    const st = S.board.cells[c];
+    if (st.length) {
+      cell.appendChild(pieceEl(st[st.length - 1]));
+      if (st.length > 1) { const u = document.createElement("span"); u.className = "under"; u.textContent = `下に${st.length - 1}`; cell.appendChild(u); }
+    }
+    if (S.phase === "manual") {
+      const top = st[st.length - 1];
+      if (sel === null && top && top.player === 1 && legal.some(m => m.from === c)) cell.classList.add("src");
+      if (sel !== null && legal.some(m => m.from === sel.from && m.size === sel.size && m.to === c)) cell.classList.add("target");
+      if (sel && sel.from === c) cell.classList.add("src");
+      cell.onclick = () => manualTap(c);
+    }
+    b.appendChild(cell);
+  }
+  const res = S.board.reserve;
+  document.getElementById("reserve").innerHTML =
+    `<span class="chip"><span class="mini p1" style="background:var(--blue)"></span>きみ 大${res[1][2]} 中${res[1][1]} 小${res[1][0]}</span>` +
+    `<span class="chip"><span class="mini" style="background:var(--orange)"></span>ぼく 大${res[0][2]} 中${res[0][1]} 小${res[0][0]}</span>`;
+  renderActions();
+  document.getElementById("tapzone").classList.toggle("hidden", S.phase !== "robot_tap");
+}
+
+function btn(text, cls, fn) { const e = document.createElement("button"); e.textContent = text; e.className = cls || ""; e.onclick = fn; return e; }
+function esc(s) { return String(s).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]); }
+
+function renderActions() {
+  const a = document.getElementById("actions"); a.innerHTML = "";
+  const p = S.phase;
+  if (p === "lobby") {
+    const row = document.createElement("div"); row.className = "row";
+    row.append(btn("きみが先手", "go", () => start(true)), btn("ぼくが先手", "robot", () => start(false)));
+    a.append(row);
+    const t = document.createElement("label"); t.className = "toggle";
+    t.innerHTML = `<input type="checkbox" id="mercy"> てかげんモード`;
+    a.append(t);
+  } else if (p === "human") {
+    a.append(btn("置いた！", "go huge", () => api("/api/human-done", {})));
+  } else if (p === "reading" || p === "robot") {
+    const s = document.createElement("div"); s.className = "spinner"; a.append(s);
+  } else if (p === "confirm") {
+    for (const c of S.candidates) a.append(btn(c.text, "alt", () => api("/api/human-move", c.move)));
+    a.append(btn("どれでもない（自分で入力）", "alt", () => { sel = null; api("/api/manual", {}); }));
+  } else if (p === "manual") {
+    const legal = S.legal || [];
+    if (sel === null) {
+      const row = document.createElement("div"); row.className = "row";
+      for (const size of [2, 1, 0]) {
+        if (legal.some(m => m.from === 9 && m.size === size))
+          row.append(btn(`手持ちの${SIZE[size]}`, "alt", () => { sel = { from: 9, size }; render(); }));
+      }
+      a.append(row);
+      const h = document.createElement("div"); h.className = "lines"; h.textContent = "手持ちの駒をえらぶか、動かした自分の駒（点線）をタッチ"; a.append(h);
+    } else {
+      const h = document.createElement("div"); h.className = "lines"; h.textContent = `${sel.from === 9 ? "手持ち" : "盤上"}の${SIZE[sel.size]} → 置いたマス（緑）をタッチ`; a.append(h);
+      a.append(btn("えらびなおす", "alt", () => { sel = null; render(); }));
+    }
+  } else if (p === "assist") {
+    a.append(btn("置いたよ", "robot huge", () => api("/api/assist-done", {})));
+  } else if (p === "over") {
+    a.append(btn("もう一回！", "go", () => api("/api/again", {})));
+    if (S.config.arm === "on") a.append(btn("ロボットに片付けてもらう", "alt", () => api("/api/tidy", {})));
+  } else if (p === "idle" || p === "qr") {
+    a.append(btn("はじめる", "go", () => api("/api/join", {})));
+  }
+}
+
+function manualTap(c) {
+  const legal = S.legal || [];
+  if (sel === null) {
+    const top = S.board.cells[c][S.board.cells[c].length - 1];
+    if (top && top.player === 1 && legal.some(m => m.from === c)) { sel = { from: c, size: top.size }; render(); }
+    return;
+  }
+  if (legal.some(m => m.from === sel.from && m.size === sel.size && m.to === c)) {
+    const mv = { from: sel.from, to: c, size: sel.size }; sel = null;
+    api("/api/human-move", mv);
+  }
+}
+
+function start(humanFirst) {
+  const m = document.getElementById("mercy");
+  api("/api/start", { humanFirst, mercy: !!(m && m.checked) });
+}
+
+document.getElementById("tapzone").addEventListener("pointerdown", () => api("/api/robot-tap", {}));
+document.getElementById("chatBtn").onclick = sendChat;
+document.getElementById("chatIn").addEventListener("keydown", e => { if (e.key === "Enter") sendChat(); });
+function sendChat() {
+  const i = document.getElementById("chatIn"); const t = i.value.trim(); if (!t) return;
+  i.value = ""; api("/api/chat", { text: t });
+}
+
+// keep the phone awake while it lies on the table
+let wake = null;
+async function keepAwake() { try { wake = await navigator.wakeLock.request("screen"); } catch (e) {} }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") keepAwake(); });
+keepAwake();
+
+async function poll() {
+  try {
+    const j = await fetch("/api/state?t=" + encodeURIComponent(T)).then(r => r.json());
+    if (j.phase && (j.version !== lastVersion || JSON.stringify(j.lines) !== JSON.stringify(S && S.lines))) {
+      if (j.phase !== "manual") sel = null;
+      lastVersion = j.version; S = j; render();
+    }
+  } catch (e) {}
+  setTimeout(poll, 600);
+}
+api("/api/join", {}).then(poll);
+</script>
+</body>
+</html>
